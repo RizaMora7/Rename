@@ -57,4 +57,4 @@ Rename Project/
 
 ## License
 
-Add a license if you want others to reuse the code (e.g. MIT). Until then, all rights are reserved.
+Distributed under the **MIT License**. See [LICENSE](LICENSE) for details.
