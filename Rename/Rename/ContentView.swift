@@ -61,26 +61,36 @@ struct ContentView: View {
             }
             .frame(minHeight: 300)
             
-            Button("Aplicar Renombrado") {
-                // 1. Ejecutar el renombrado y guardar solo los que fallaron
-                let failedItems = RenameEngine.applyRenaming(items: fileItems)
-                
-                // 2. ACTUALIZACIÓN: En lugar de reemplazar la lista,
-                // refrescamos la lista con los nuevos nombres reales del disco.
-                // Esto mantiene los archivos en la vista y actualiza los nombres correctamente.
-                
-                // Si quieres que la lista siempre muestre el estado real del disco:
-                fileItems = fileItems.map { item in
-                    // Si no falló, actualizamos el nombre a lo que ahora tiene en el disco
-                    if !failedItems.contains(item) {
-                        return FileItem(url: item.url.deletingLastPathComponent().appendingPathComponent(item.newName),
-                                        newName: item.newName,
-                                        hasAccess: item.hasAccess)
+            HStack {
+                Button("Aplicar Renombrado") {
+                    // 1. Ejecutar el renombrado y guardar solo los que fallaron
+                    let failedItems = RenameEngine.applyRenaming(items: fileItems)
+                    
+                    // 2. ACTUALIZACIÓN: En lugar de reemplazar la lista,
+                    // refrescamos la lista con los nuevos nombres reales del disco.
+                    // Esto mantiene los archivos en la vista y actualiza los nombres correctamente.
+                    
+                    // Si quieres que la lista siempre muestre el estado real del disco:
+                    fileItems = fileItems.map { item in
+                        // Si no falló, actualizamos el nombre a lo que ahora tiene en el disco
+                        if !failedItems.contains(item) {
+                            return FileItem(url: item.url.deletingLastPathComponent().appendingPathComponent(item.newName),
+                                            newName: item.newName,
+                                            hasAccess: item.hasAccess)
+                        }
+                        return item
                     }
-                    return item
                 }
+                .disabled(fileItems.isEmpty)
+                
+                Button("Limpiar") {
+                    // Vacía la lista de archivos cargados (reinicia la pantalla).
+                    // Mantiene los textos "Buscar"/"Reemplazar" para poder cargar
+                    // otro grupo con la misma configuración.
+                    fileItems = []
+                }
+                .disabled(fileItems.isEmpty)
             }
-            .disabled(fileItems.isEmpty)
         }
         .padding()
         .onChange(of: findText) { _ in updatePreview() }
