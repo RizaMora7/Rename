@@ -13,7 +13,15 @@ struct ContentView: View {
     @State private var findText = ""
     @State private var replaceText = ""
     @State private var fileItems: [FileItem] = []
-    
+    @State private var protectExtension = true
+
+    // Lote recién aplicado, para poder deshacerlo.
+    @State private var lastBatch: [(from: URL, to: URL)] = []
+
+    // Aviso de resultado (renombrados / colisiones / fallos).
+    @State private var alertMessage = ""
+    @State private var showAlert = false
+
     var body: some View {
         VStack(spacing: 20) {
             Picker("Cargar Preset:", selection: Binding(
@@ -24,7 +32,7 @@ struct ContentView: View {
                         replaceText = p.replace
                     }
                 }
-                
+
             )) {
                 Text("Seleccionar preset").tag("")
                 ForEach(presetManager.presets) { preset in
@@ -32,7 +40,7 @@ struct ContentView: View {
                 }
             }
             .pickerStyle(.menu)
-            
+
             HStack {
                 TextField("Buscar", text: $findText)
                         .textFieldStyle(.roundedBorder) // Esto hará visible el campo
@@ -45,10 +53,14 @@ struct ContentView: View {
                 }
             }
             .padding()
-            
+
+            Toggle("Proteger la extensión de los archivos", isOn: $protectExtension)
+                .toggleStyle(.checkbox)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
             Table(fileItems) {
                 TableColumn("Nombre Original", value: \.originalName)
-                
+
                 TableColumn("Nuevo Nombre") { item in
                     Text(item.newName)
                         .foregroundColor(item.originalName != item.newName ? .red : .primary)
@@ -60,29 +72,13 @@ struct ContentView: View {
                 return true
             }
             .frame(minHeight: 300)
-            
+
             HStack {
                 Button("Aplicar Renombrado") {
-                    // 1. Ejecutar el renombrado y guardar solo los que fallaron
-                    let failedItems = RenameEngine.applyRenaming(items: fileItems)
-                    
-                    // 2. ACTUALIZACIÓN: En lugar de reemplazar la lista,
-                    // refrescamos la lista con los nuevos nombres reales del disco.
-                    // Esto mantiene los archivos en la vista y actualiza los nombres correctamente.
-                    
-                    // Si quieres que la lista siempre muestre el estado real del disco:
-                    fileItems = fileItems.map { item in
-                        // Si no falló, actualizamos el nombre a lo que ahora tiene en el disco
-                        if !failedItems.contains(item) {
-                            return FileItem(url: item.url.deletingLastPathComponent().appendingPathComponent(item.newName),
-                                            newName: item.newName,
-                                            hasAccess: item.hasAccess)
-                        }
-                        return item
-                    }
+                    applyRenaming()
                 }
                 .disabled(fileItems.isEmpty)
-                
+
                 Button("Limpiar") {
                     // Vacía la lista de archivos cargados (reinicia la pantalla).
                     // Mantiene los textos "Buscar"/"Reemplazar" para poder cargar
@@ -90,24 +86,94 @@ struct ContentView: View {
                     fileItems = []
                 }
                 .disabled(fileItems.isEmpty)
+
+                Button("Deshacer") {
+                    undoLastBatch()
+                }
+                .disabled(lastBatch.isEmpty)
             }
         }
         .padding()
         .onChange(of: findText) { _ in updatePreview() }
         .onChange(of: replaceText) { _ in updatePreview() }
-    } // <--- Cierre de body
-    
-    private func updatePreview() {
-            // CORRECCIÓN: Pasamos el arreglo de objetos FileItem, no solo las URLs
-            fileItems = RenameEngine.previewRename(files: fileItems, find: findText, replace: replaceText)
+        .onChange(of: protectExtension) { _ in updatePreview() }
+        .alert("Resultado del renombrado", isPresented: $showAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(alertMessage)
         }
-    
+    } // <--- Cierre de body
+
+    private func updatePreview() {
+        // Recalcula los nombres nuevos sin tocar el disco.
+        fileItems = RenameEngine.previewRename(files: fileItems,
+                                               find: findText,
+                                               replace: replaceText,
+                                               protectExtension: protectExtension)
+    }
+
+    private func applyRenaming() {
+        let outcome = RenameEngine.applyRenaming(items: fileItems,
+                                                 protectExtension: protectExtension)
+        lastBatch = outcome.renamed
+
+        // Refresca la lista con los nombres reales del disco para los renombrados.
+        let toByFrom = Dictionary(uniqueKeysWithValues: outcome.renamed.map { ($0.from, $0.to) })
+        fileItems = fileItems.map { item in
+            if let newURL = toByFrom[item.url] {
+                return FileItem(url: newURL, newName: item.newName, hasAccess: false)
+            }
+            return item
+        }
+
+        // Mensaje de resultado para el usuario.
+        var lines: [String] = ["Renombrados: \(outcome.renamed.count)"]
+        if outcome.skipped > 0 { lines.append("Sin cambios: \(outcome.skipped)") }
+        if !outcome.errors.isEmpty {
+            lines.append("Problemas (\(outcome.errors.count)):")
+            for e in outcome.errors.prefix(8) {
+                lines.append("• \(e.fileName): \(e.reason)")
+            }
+            if outcome.errors.count > 8 {
+                lines.append("… y \(outcome.errors.count - 8) más.")
+            }
+        }
+        alertMessage = lines.joined(separator: "\n")
+        showAlert = true
+    }
+
+    private func undoLastBatch() {
+        let errors = RenameEngine.undo(renamed: lastBatch)
+
+        // Restaura los URLs de la lista a los nombres originales.
+        let fromByTo = Dictionary(uniqueKeysWithValues: lastBatch.map { ($0.to, $0.from) })
+        fileItems = fileItems.map { item in
+            if let originalURL = fromByTo[item.url] {
+                return FileItem(url: originalURL, newName: originalURL.lastPathComponent, hasAccess: item.hasAccess)
+            }
+            return item
+        }
+        lastBatch = []
+        updatePreview()
+
+        if errors.isEmpty {
+            alertMessage = "Se revirtió el último lote de renombrados."
+        } else {
+            var lines = ["Se revirtió el lote con \(errors.count) problema(s):"]
+            for e in errors.prefix(8) {
+                lines.append("• \(e.fileName): \(e.reason)")
+            }
+            alertMessage = lines.joined(separator: "\n")
+        }
+        showAlert = true
+    }
+
     private func handleDrop(providers: [NSItemProvider]) {
         for provider in providers {
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url = url else { return }
                 let gotAccess = url.startAccessingSecurityScopedResource()
-                
+
                 DispatchQueue.main.async {
                     self.fileItems.append(FileItem(url: url, newName: url.lastPathComponent, hasAccess: gotAccess))
                 }
